@@ -8,7 +8,7 @@ from rclpy.time import Time
 from rclpy.node import Node
 from std_msgs.msg import Header
 from sensor_msgs.msg import LaserScan
-from nav2_msgs.msg import ParticleCloud, Particle
+from nav2_msgs.msg import ParticleCloud
 from nav2_msgs.msg import Particle as Nav2Particle
 from geometry_msgs.msg import PoseWithCovarianceStamped, Pose, Point, Quaternion
 from rclpy.duration import Duration
@@ -245,8 +245,21 @@ class ParticleFilter(Node):
                       particle cloud around.  If this input is omitted, the odometry will be used """
         if xy_theta is None:
             xy_theta = self.transform_helper.convert_pose_to_xy_and_theta(self.odom_pose)
-        self.particle_cloud = []
-        # TODO create particles
+
+        # DONE create particles
+
+        width_meters = (
+            self.occupancy_field.map.info.width *
+            self.occupancy_field.map.info.resolution
+        )
+        height_meters = (
+            self.occupancy_field.map.info.height *
+            self.occupancy_field.map.info.resolution
+        )
+
+        particle_poses = np.random.uniform((0, 0, -np.pi), (width_meters, height_meters, np.pi), (self.n_particles, 3))
+
+        self.particle_cloud = [Particle(x, y, theta) for x, y, theta in particle_poses]
 
         self.normalize_particles()
         self.update_robot_pose()
