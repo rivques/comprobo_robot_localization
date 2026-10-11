@@ -23,7 +23,7 @@ class OccupancyField(object):
         self.future = self.cli.call_async(GetMap.Request())
         rclpy.spin_until_future_complete(node, self.future)
         self.map = self.future.result().map
-        node.get_logger().info("map received width: {0} height: {1}".format(self.map.info.width, self.map.info.height))
+        node.get_logger().info("map received width: {0} height: {1}, resolution: {2}".format(self.map.info.width, self.map.info.height, self.map.info.resolution))
         # The coordinates of each grid cell in the map
         X = np.zeros((self.map.info.width*self.map.info.height, 2))
 
@@ -97,6 +97,8 @@ class OccupancyField(object):
             y_coord = int(y_coord)
 
         is_valid = (x_coord >= 0) & (y_coord >= 0) & (x_coord < self.map.info.width) & (y_coord < self.map.info.height)
+        if not is_valid:
+            print(f"Invalid cell coords {x_coord}, {y_coord}")
         if type(x) is np.ndarray:
             distances = np.float('nan')*np.ones(x_coord.shape)
             distances[is_valid] = self.closest_occ[x_coord[is_valid], y_coord[is_valid]]
