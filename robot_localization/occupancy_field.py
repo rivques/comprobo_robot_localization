@@ -3,6 +3,7 @@
 
 import rclpy
 from nav_msgs.srv import GetMap
+from nav_msgs.msg import OccupancyGrid
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 
@@ -15,15 +16,30 @@ class OccupancyField(object):
             the closest obstacle
     """
 
-    def __init__(self, node):
+    def __init__(self, node, extra_meters=0):
         # grab the map from the map server
         self.cli = node.create_client(GetMap, 'map_server/map')
         while not self.cli.wait_for_service(timeout_sec=1.0):
             node.get_logger().info('service not available, waiting again...')
         self.future = self.cli.call_async(GetMap.Request())
         rclpy.spin_until_future_complete(node, self.future)
-        self.map = self.future.result().map
+        self.map: OccupancyGrid = self.future.result().map
         node.get_logger().info("map received width: {0} height: {1}, resolution: {2}".format(self.map.info.width, self.map.info.height, self.map.info.resolution))
+        
+        # expand the map in all directions so we can answer questions about out-of-bounds lidar points
+        old_width = self.map.info.width
+        old_height = self.map.info.height
+        self.actual_width_m = old_width * self.map.info.resolution
+        self.actual_height_m = old_height * self.map.info.resolution
+        self.actual_origin_x_m = self.map.info.origin.position.x
+        self.actual_origin_y_m = self.map.info.origin.position.y
+        cells_to_add = int(extra_meters / self.map.info.resolution)
+        print(f"Adding {cells_to_add} cells in each direction")
+        self.map.info.width += 2 * cells_to_add
+        self.map.info.height += 2 * cells_to_add
+        self.map.info.origin.position.x -= cells_to_add * self.map.info.resolution
+        self.map.info.origin.position.y -= cells_to_add * self.map.info.resolution
+
         # The coordinates of each grid cell in the map
         X = np.zeros((self.map.info.width*self.map.info.height, 2))
 
@@ -33,9 +49,15 @@ class OccupancyField(object):
         for i in range(self.map.info.width):
             for j in range(self.map.info.height):
                 # occupancy grids are stored in row major order
-                ind = i + j*self.map.info.width
-                if self.map.data[ind] > 0:
-                    total_occupied += 1
+                # compensate for the extra cells so we don't index out of bounds
+                old_i = i - cells_to_add
+                old_j = j - cells_to_add
+                if old_i >= 0 and old_i < old_width and old_j >= 0 and old_j < old_height:
+                    # this point would have landed on the original map
+                    ind = old_i + old_j * old_width
+                    # check if there's something here
+                    if self.map.data[ind] > 0:
+                        total_occupied += 1
                 X[curr, 0] = float(i)
                 X[curr, 1] = float(j)
                 curr += 1
@@ -46,11 +68,17 @@ class OccupancyField(object):
         for i in range(self.map.info.width):
             for j in range(self.map.info.height):
                 # occupancy grids are stored in row major order
-                ind = i + j*self.map.info.width
-                if self.map.data[ind] > 0:
-                    occupied[curr, 0] = float(i)
-                    occupied[curr, 1] = float(j)
-                    curr += 1
+                # compensate for the extra cells so we don't index out of bounds
+                old_i = i - cells_to_add
+                old_j = j - cells_to_add
+                if old_i >= 0 and old_i < old_width and old_j >= 0 and old_j < old_height:
+                    # this point would have landed on the original map
+                    ind = old_i + old_j * old_width
+                    if self.map.data[ind] > 0:
+                        # there's something here, note that
+                        occupied[curr, 0] = float(i)
+                        occupied[curr, 1] = float(j)
+                        curr += 1
         node.get_logger().info("building ball tree")
         # use super fast scikit learn nearest neighbor algorithm
         nbrs = NearestNeighbors(n_neighbors=1,
@@ -85,8 +113,7 @@ class OccupancyField(object):
 
     def get_closest_obstacle_distance(self, x, y):
         """ Compute the closest obstacle to the specified (x,y) coordinate in
-            the map.  If the (x,y) coordinate is out of the map boundaries, nan
-            will be returned. """
+            the map. If the x,y coordinate is out of bounds, no big deal."""
         x_coord = (x - self.map.info.origin.position.x)/self.map.info.resolution
         y_coord = (y - self.map.info.origin.position.y)/self.map.info.resolution
         if type(x) is np.ndarray:
@@ -98,7 +125,8 @@ class OccupancyField(object):
 
         is_valid = (x_coord >= 0) & (y_coord >= 0) & (x_coord < self.map.info.width) & (y_coord < self.map.info.height)
         if not is_valid:
-            print(f"Invalid cell coords {x_coord}, {y_coord}")
+            pass
+            # print(f"Invalid cell coords {x_coord}, {y_coord}")
         if type(x) is np.ndarray:
             distances = np.float('nan')*np.ones(x_coord.shape)
             distances[is_valid] = self.closest_occ[x_coord[is_valid], y_coord[is_valid]]
