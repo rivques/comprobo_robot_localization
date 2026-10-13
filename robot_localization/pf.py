@@ -219,7 +219,7 @@ class ParticleFilter(Node):
         else:
             self.current_odom_xy_theta = new_odom_xy_theta
             return
-        dist_translated = np.linalg.norm(delta[0:1])
+        dist_translated = np.linalg.norm(delta[0:2])
         x_noise = np.random.normal(scale=ODOM_NOISE*dist_translated, size=len(self.particle_cloud))
         y_noise = np.random.normal(scale=ODOM_NOISE*dist_translated, size=len(self.particle_cloud))
         theta_noise = np.random.normal(scale=math.fabs(ODOM_NOISE*delta[2]), size=len(self.particle_cloud))
