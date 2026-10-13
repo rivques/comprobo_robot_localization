@@ -164,11 +164,14 @@ class ParticleFilter(Node):
             # now that we have all of the necessary transforms we can update the particle cloud
             self.initialize_particle_cloud(msg.header.stamp)
         elif self.moved_far_enough_to_update(new_odom_xy_theta):
+            start_time = time.monotonic()
             # we have moved far enough to do an update!
             self.resample_particles()               # resample particles to focus on areas of high density
             self.update_particles_with_odom()    # update based on odometry
             self.update_particles_with_laser(r, theta)   # update based on laser scan
             self.update_robot_pose()                # update robot's pose based on particles
+            end_time = time.monotonic()
+            print(f"particle filter update took {end_time-start_time:.2f} real seconds")
         # publish particles (so things like rviz can see them)
         self.publish_particles(msg.header.stamp)
 
@@ -197,12 +200,12 @@ class ParticleFilter(Node):
         else:
             self.get_logger().warn("Can't set map->odom transform since no odom data received")
 
-    def update_particles_with_odom(self):
+    def update_particles_with_odom(self, ODOM_NOISE=0.30):
         """ Update the particles using the newly given odometry pose.
             Also, store the transform from the odom frame to the map frame
             in each particle.
+            ODOM_NOISE: the amount of noise to add to the odometry update (as a fraction of the distance moved)
         """
-        ODOM_NOISE = 0.30 # % - for each meter we go, there's a stddev of 5cm noise
 
         new_odom_xy_theta = self.transform_helper.convert_pose_to_xy_and_theta(self.odom_pose)
         # compute the change in x,y,theta since our last update
@@ -224,13 +227,13 @@ class ParticleFilter(Node):
         # Based on the linear algebra from the conceptual overview:
         init_aff_odom = np.array([
             [np.cos(old_odom_xy_theta[2]), -np.sin(old_odom_xy_theta[2]), old_odom_xy_theta[0]],
-            [np.sin(old_odom_xy_theta[2]),  np.cos(old_odom_xy_theta[2]), old_odom_xy_theta[2]],
+            [np.sin(old_odom_xy_theta[2]),  np.cos(old_odom_xy_theta[2]), old_odom_xy_theta[1]],
             [0,                             0,                            1                   ]
         ])
         inv_init_aff_odom = np.linalg.inv(init_aff_odom)
         final_aff_odom = np.array([
             [np.cos(new_odom_xy_theta[2]), -np.sin(new_odom_xy_theta[2]), new_odom_xy_theta[0]],
-            [np.sin(new_odom_xy_theta[2]),  np.cos(new_odom_xy_theta[2]), new_odom_xy_theta[2]],
+            [np.sin(new_odom_xy_theta[2]),  np.cos(new_odom_xy_theta[2]), new_odom_xy_theta[1]],
             [0,                             0,                            1                   ]
         ])
 
@@ -251,7 +254,7 @@ class ParticleFilter(Node):
             particle.y = final_particle_aff_map[1, 2]
             particle.theta = np.atan2(final_particle_aff_map[1, 0], final_particle_aff_map[0, 0])
 
-            # normalize those
+            # prevent these from moving off the map
             particle.x = np.clip(particle.x, self.occupancy_field.actual_origin_x_m, self.occupancy_field.actual_width_m + self.occupancy_field.actual_origin_x_m)
             particle.y = np.clip(particle.y, self.occupancy_field.actual_origin_y_m, self.occupancy_field.actual_height_m + self.occupancy_field.actual_origin_y_m)
             particle.theta = self.transform_helper.angle_normalize(particle.theta)
@@ -309,7 +312,7 @@ class ParticleFilter(Node):
                 obstacle_distance = self.occupancy_field.get_closest_obstacle_distance(point[0], point[1])
                 if math.isfinite(obstacle_distance):
                     added_points += 1
-                    particle.w += obstacle_distance ** 4
+                    particle.w += obstacle_distance ** 2
 
             particle.w /= added_points # normalize for number of points added
 
