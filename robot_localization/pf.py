@@ -46,10 +46,11 @@ class Particle(object):
         return Pose(position=Point(x=self.x, y=self.y, z=0.0),
                     orientation=Quaternion(x=q[0], y=q[1], z=q[2], w=q[3]))
 
+    def equal_pose(self, other):
+        return self.x == other.x and self.y == other.y and self.theta == other.theta
+
     def __repr__(self) -> str:
         return f"Particle(x={self.x:.3f}, y={self.y:.3f}, theta={self.theta:.2f}, w={self.w:.3f})"
-
-    # TODO: define additional helper functions if needed
 
 class ParticleFilter(Node):
     """ The class that represents a Particle Filter ROS Node
@@ -80,14 +81,10 @@ class ParticleFilter(Node):
         self.scan_topic = "scan"        # the topic where we will get laser scans from 
 
         self.n_particles = 1300          # the number of particles to use
+        self.proportion_uniform = 0.3    # proportion of particles sampled from a uniform distribution instead of from previous particle weights
 
         self.d_thresh = 0.2             # the amount of linear movement before performing an update
         self.a_thresh = math.pi/6       # the amount of angular movement before performing an update
-
-        # TODO: define additional constants if needed
-
-        # pose_listener responds to selection of a new approximate robot location (for instance using rviz)
-        self.create_subscription(PoseWithCovarianceStamped, 'initialpose', self.update_initial_pose, 10)
 
         # publish the current particle cloud.  This enables viewing particles in rviz.
         self.particle_pub = self.create_publisher(ParticleCloud, "particle_cloud", qos_profile_sensor_data)
@@ -162,7 +159,7 @@ class ParticleFilter(Node):
             self.current_odom_xy_theta = new_odom_xy_theta
         elif not self.particle_cloud:
             # now that we have all of the necessary transforms we can update the particle cloud
-            self.initialize_particle_cloud(msg.header.stamp)
+            self.initialize_particle_cloud()
         elif self.moved_far_enough_to_update(new_odom_xy_theta):
             start_time = time.monotonic()
             # we have moved far enough to do an update!
@@ -180,12 +177,9 @@ class ParticleFilter(Node):
                math.fabs(new_odom_xy_theta[1] - self.current_odom_xy_theta[1]) > self.d_thresh or \
                math.fabs(new_odom_xy_theta[2] - self.current_odom_xy_theta[2]) > self.a_thresh
 
-
     def update_robot_pose(self):
         """ Update the estimate of the robot's pose given the updated particles.
-            There are two logical methods for this:
-                (1): compute the mean pose
-                (2): compute the most likely pose (i.e. the mode of the distribution)
+            Pick the most likely particle as our pose estimate.
         """
         # first make sure that the particle weights are normalized
         self.normalize_particles()
@@ -266,20 +260,18 @@ class ParticleFilter(Node):
             function draw_random_sample in helper_functions.py.
         """
 
-        proportion_uniform = 0.3
-
         # DONE: fill out the rest of the implementation
         self.particle_cloud = draw_random_sample(
             self.particle_cloud,
             [particle.w for particle in self.particle_cloud],
-            int(self.n_particles * (1 - proportion_uniform))
+            int(self.n_particles * (1 - self.proportion_uniform))
         )
 
         particle_poses = np.random.uniform(
             (self.occupancy_field.actual_origin_x_m, self.occupancy_field.actual_origin_y_m, -np.pi),
             (self.occupancy_field.actual_width_m + self.occupancy_field.actual_origin_x_m, 
             self.occupancy_field.actual_height_m + self.occupancy_field.actual_origin_y_m, np.pi),
-            (int(self.n_particles * proportion_uniform), 3)
+            (int(self.n_particles * self.proportion_uniform), 3)
         )
         self.particle_cloud += [Particle(x, y, theta) for x, y, theta in particle_poses]
 
@@ -289,7 +281,6 @@ class ParticleFilter(Node):
             r: the distance readings to obstacles, in meters
             theta: the angle relative to the robot frame for each corresponding reading, in radians
         """
-        # TODO: implement this
         # polar to rectangular
         scan_points = np.array([
             [r[i] * np.cos(theta[i]), r[i] * np.sin(theta[i]), 1]
@@ -318,37 +309,9 @@ class ParticleFilter(Node):
 
         print(f"Smallest particle weight is {min([particle.w for particle in self.particle_cloud]):.3}")
 
-        # closest_scan_obstacle = min(r)
-        # if not math.isfinite(closest_scan_obstacle):
-        #     print(f"AAAAAAAA non-finite closest obstacle {closest_scan_obstacle} from scan {r}")
-        #     return # don't try to update particles
-        # bad_particles = []
+    def initialize_particle_cloud(self):
+        """ Initialize the particle cloud to a uniform distribution across the map."""
 
-        # for particle in self.particle_cloud:
-        #     closest_obstacle = self.occupancy_field.get_closest_obstacle_distance(particle.x, particle.y)
-        #     particle.w = abs(closest_obstacle - closest_scan_obstacle)
-        #     if math.isnan(particle.w):
-        #         print(f"AAAA NaN for particle {particle} and closest obstacle {closest_obstacle}")
-        #         bad_particles.append(particle)
-
-        # for bad_particle in bad_particles:
-        #     self.particle_cloud.remove(bad_particle)
-            
-    def update_initial_pose(self, msg):
-        """ Callback function to handle re-initializing the particle filter based on a pose estimate.
-            These pose estimates could be generated by another ROS Node or could come from the rviz GUI """
-        xy_theta = self.transform_helper.convert_pose_to_xy_and_theta(msg.pose.pose)
-        self.initialize_particle_cloud(msg.header.stamp, xy_theta)
-
-    def initialize_particle_cloud(self, timestamp, xy_theta=None):
-        """ Initialize the particle cloud.
-            Arguments
-            xy_theta: a triple consisting of the mean x, y, and theta (yaw) to initialize the
-                      particle cloud around.  If this input is omitted, the odometry will be used """
-        if xy_theta is None:
-            xy_theta = self.transform_helper.convert_pose_to_xy_and_theta(self.odom_pose)
-
-        # DONE create particles
 
         particle_poses = np.random.uniform(
             (self.occupancy_field.actual_origin_x_m, self.occupancy_field.actual_origin_y_m, -np.pi),
@@ -366,7 +329,7 @@ class ParticleFilter(Node):
         """ Make sure the particle weights define a valid distribution (i.e. sum to 1.0) """
         # DONE: implement this
 
-        b = 0.4 # TODO tune this
+        b = 0.4 
 
         sum = 0
 
