@@ -1,4 +1,5 @@
-from typing import List
+from dataclasses import dataclass
+from typing import Any, List
 
 import numpy as np
 import pytest
@@ -29,17 +30,33 @@ class InertOccupancyField:
         wall_distance = min(abs(x), abs(y), abs(x - self.actual_width_m), abs(y - self.actual_height_m))
         return wall_distance
 
+class InertParam:
+    value: Any
+
+    PARAMS = {
+        "n_particles": 10_000, # for testing only
+        "proportion_uniform": 0.3,
+        "normalization_base": 0.4,
+        "odom_noise": 0 # for testing only
+    }
+
+    def __init__(self, param_name) -> None:
+        try:
+            self.value = self.PARAMS[param_name]
+        except KeyError as e:
+            raise NameError(f"Tried to access a ROS param that does not exist: {e}")
+
 class InertNode:
     # workaround since an actual node would hang on calling mapserver etc on init
     odom_pose = Particle(x=0,y=0,theta=0).as_pose()
     robot_pose: Pose = None
     current_odom_xy_theta = (0,0,0)
-    n_particles = 10  # ??
-    proportion_uniform = 0.3
     particle_cloud : List[Particle] = []
     transform_helper = InertTFHelper()
     occupancy_field = InertOccupancyField()
-    
+
+    def get_parameter(self, param_name):
+        return InertParam(param_name)
     def normalize_particles(self):
         return ParticleFilter.normalize_particles(self)
     def update_robot_pose(self):
@@ -58,7 +75,6 @@ def test_normalize_particles():
 
 def test_resample_particles():
     node = InertNode()
-    node.n_particles = 10_000
     initial_particles = [
         Particle(x=0, y=0, theta=0, w=0.1),
         Particle(x=3, y=1, theta=np.pi, w=0.7),
@@ -78,9 +94,9 @@ def test_resample_particles():
         else:
             counts[3] += 1
 
-    proportions = [count / node.n_particles for count in counts]
-    expected_proportions = [particle.w * (1 - node.proportion_uniform) for particle in initial_particles]
-    expected_proportions.append(node.proportion_uniform)
+    proportions = [count / node.get_parameter("n_particles").value for count in counts]
+    expected_proportions = [particle.w * (1 - node.get_parameter("proportion_uniform").value) for particle in initial_particles]
+    expected_proportions.append(node.get_parameter("proportion_uniform").value)
     
     assert proportions == pytest.approx(expected_proportions, abs=0.01)
 
@@ -104,14 +120,14 @@ def test_update_particles_with_odom():
     # move nowhere
     new_odom_pose = Particle(x=0, y=0, theta=0).as_pose() # using this as a shortcut for xytheta tuple to Pose
     node.odom_pose = new_odom_pose
-    ParticleFilter.update_particles_with_odom(node, ODOM_NOISE=0)
+    ParticleFilter.update_particles_with_odom(node)
     # nothing should have moved
     assert [(p.x, p.y, p.theta) for p in node.particle_cloud] == pytest.approx([(0, 0, 0), (0, 1, -np.pi/2)])
 
     # move 1 meter forward
     new_odom_pose = Particle(x=1, y=0, theta=0).as_pose()
     node.odom_pose = new_odom_pose
-    ParticleFilter.update_particles_with_odom(node, ODOM_NOISE=0)
+    ParticleFilter.update_particles_with_odom(node)
     # particles should have moved accordingly
     assert [(float(p.x), float(p.y), float(p.theta)) for p in node.particle_cloud] == [pytest.approx((1, 0, 0)), pytest.approx((0, 0, -np.pi/2))]
 
@@ -119,7 +135,7 @@ def test_update_particles_with_odom():
     # remember we started at 1,0,0
     new_odom_pose = Particle(x=1, y=1, theta=np.pi/4).as_pose()
     node.odom_pose = new_odom_pose
-    ParticleFilter.update_particles_with_odom(node, ODOM_NOISE=0)
+    ParticleFilter.update_particles_with_odom(node)
     # particles should have moved accordingly
     assert [(p.x, p.y, p.theta) for p in node.particle_cloud] == [pytest.approx((1, 1, np.pi/4)), pytest.approx((1, 0, -np.pi/4))]
 
@@ -160,7 +176,7 @@ def test_initialize_particle_cloud():
 
     particle_positions = np.array([[p.x, p.y, p.theta] for p in node.particle_cloud])
 
-    assert len(node.particle_cloud) == node.n_particles # we should have as many particles as we ask for
+    assert len(node.particle_cloud) == node.get_parameter("n_particles").value # we should have as many particles as we ask for
     assert len(np.unique(particle_positions.flatten())) == len(particle_positions.flatten()) # no two particles should be in the same place
     
     # all particles should be on the map

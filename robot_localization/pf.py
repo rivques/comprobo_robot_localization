@@ -80,11 +80,13 @@ class ParticleFilter(Node):
         self.odom_frame = "odom"        # the name of the odometry coordinate frame
         self.scan_topic = "scan"        # the topic where we will get laser scans from 
 
-        self.n_particles = 1300          # the number of particles to use
-        self.proportion_uniform = 0.3    # proportion of particles sampled from a uniform distribution instead of from previous particle weights
+        self.declare_parameter('n_particles', 1300)          # the number of particles to use
+        self.declare_parameter('proportion_uniform', 0.3)    # proportion of particles sampled from a uniform distribution instead of from previous particle weights
+        self.declare_parameter('normalization_base', 0.4)    # what base to use in softmax when normalizing weights
+        self.declare_parameter('odom_noise', 0.3)            # how much noise to add to the motion update, as a fraction of distance moved
 
-        self.d_thresh = 0.2             # the amount of linear movement before performing an update
-        self.a_thresh = math.pi/6       # the amount of angular movement before performing an update
+        self.declare_parameter("d_thresh", 0.2)             # the amount of linear movement before performing an update
+        self.declare_parameter("a_thresh", math.pi/6)       # the amount of angular movement before performing an update
 
         # publish the current particle cloud.  This enables viewing particles in rviz.
         self.particle_pub = self.create_publisher(ParticleCloud, "particle_cloud", qos_profile_sensor_data)
@@ -102,7 +104,7 @@ class ParticleFilter(Node):
         self.particle_cloud = []
 
         self.current_odom_xy_theta = []
-        self.occupancy_field = OccupancyField(self, extra_meters = 15)
+        self.occupancy_field = OccupancyField(self, extra_meters = 15) # 15 meters is a little more than the farthest lidar points we saw
         self.transform_helper = TFHelper(self)
 
         # we are using a thread to work around single threaded execution bottleneck
@@ -173,9 +175,9 @@ class ParticleFilter(Node):
         self.publish_particles(msg.header.stamp)
 
     def moved_far_enough_to_update(self, new_odom_xy_theta):
-        return math.fabs(new_odom_xy_theta[0] - self.current_odom_xy_theta[0]) > self.d_thresh or \
-               math.fabs(new_odom_xy_theta[1] - self.current_odom_xy_theta[1]) > self.d_thresh or \
-               math.fabs(new_odom_xy_theta[2] - self.current_odom_xy_theta[2]) > self.a_thresh
+        return math.fabs(new_odom_xy_theta[0] - self.current_odom_xy_theta[0]) > self.get_parameter("d_thresh").value or \
+               math.fabs(new_odom_xy_theta[1] - self.current_odom_xy_theta[1]) > self.get_parameter("d_thresh").value or \
+               math.fabs(new_odom_xy_theta[2] - self.current_odom_xy_theta[2]) > self.get_parameter("a_thresh").value
 
     def update_robot_pose(self):
         """ Update the estimate of the robot's pose given the updated particles.
@@ -194,11 +196,10 @@ class ParticleFilter(Node):
         else:
             self.get_logger().warn("Can't set map->odom transform since no odom data received")
 
-    def update_particles_with_odom(self, ODOM_NOISE=0.30):
+    def update_particles_with_odom(self):
         """ Update the particles using the newly given odometry pose.
             Also, store the transform from the odom frame to the map frame
             in each particle.
-            ODOM_NOISE: the amount of noise to add to the odometry update (as a fraction of the distance moved)
         """
 
         new_odom_xy_theta = self.transform_helper.convert_pose_to_xy_and_theta(self.odom_pose)
@@ -214,9 +215,10 @@ class ParticleFilter(Node):
             self.current_odom_xy_theta = new_odom_xy_theta
             return
         dist_translated = np.linalg.norm(delta[0:2])
-        x_noise = np.random.normal(scale=ODOM_NOISE*dist_translated, size=len(self.particle_cloud))
-        y_noise = np.random.normal(scale=ODOM_NOISE*dist_translated, size=len(self.particle_cloud))
-        theta_noise = np.random.normal(scale=math.fabs(ODOM_NOISE*delta[2]), size=len(self.particle_cloud))
+        odom_noise = self.get_parameter("odom_noise").value
+        x_noise = np.random.normal(scale=odom_noise*dist_translated, size=len(self.particle_cloud))
+        y_noise = np.random.normal(scale=odom_noise*dist_translated, size=len(self.particle_cloud))
+        theta_noise = np.random.normal(scale=math.fabs(odom_noise*delta[2]), size=len(self.particle_cloud))
 
         # Based on the linear algebra from the conceptual overview:
         init_aff_odom = np.array([
@@ -260,18 +262,17 @@ class ParticleFilter(Node):
             function draw_random_sample in helper_functions.py.
         """
 
-        # DONE: fill out the rest of the implementation
         self.particle_cloud = draw_random_sample(
             self.particle_cloud,
             [particle.w for particle in self.particle_cloud],
-            int(self.n_particles * (1 - self.proportion_uniform))
+            int(self.get_parameter('n_particles').value * (1 - self.get_parameter('proportion_uniform').value))
         )
 
         particle_poses = np.random.uniform(
             (self.occupancy_field.actual_origin_x_m, self.occupancy_field.actual_origin_y_m, -np.pi),
             (self.occupancy_field.actual_width_m + self.occupancy_field.actual_origin_x_m, 
             self.occupancy_field.actual_height_m + self.occupancy_field.actual_origin_y_m, np.pi),
-            (int(self.n_particles * self.proportion_uniform), 3)
+            (int(self.get_parameter('n_particles').value * self.get_parameter('proportion_uniform').value), 3)
         )
         self.particle_cloud += [Particle(x, y, theta) for x, y, theta in particle_poses]
 
@@ -317,7 +318,7 @@ class ParticleFilter(Node):
             (self.occupancy_field.actual_origin_x_m, self.occupancy_field.actual_origin_y_m, -np.pi),
             (self.occupancy_field.actual_width_m + self.occupancy_field.actual_origin_x_m, 
             self.occupancy_field.actual_height_m + self.occupancy_field.actual_origin_y_m, np.pi),
-            (self.n_particles, 3)
+            (self.get_parameter('n_particles').value, 3)
         )
 
         self.particle_cloud = [Particle(x, y, theta) for x, y, theta in particle_poses]
@@ -327,14 +328,10 @@ class ParticleFilter(Node):
 
     def normalize_particles(self):
         """ Make sure the particle weights define a valid distribution (i.e. sum to 1.0) """
-        # DONE: implement this
-
-        b = 0.4 
-
         sum = 0
 
         for particle in self.particle_cloud:
-            particle.w = b ** particle.w
+            particle.w = self.get_parameter('normalization_base').value ** particle.w
             sum += particle.w
 
         for particle in self.particle_cloud:
