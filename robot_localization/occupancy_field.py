@@ -1,5 +1,6 @@
-""" An implementation of an occupancy field that you can use to implement
-    your particle filter """
+""" An implementation of an occupancy field that calculates the distance
+to the closest obstacle for any point on the map. Modified from stock OccupancyField
+to also support returning values some distance outside of the map. """
 
 import rclpy
 from nav_msgs.srv import GetMap
@@ -17,6 +18,13 @@ class OccupancyField(object):
     """
 
     def __init__(self, node, extra_meters=0):
+        """
+        Initialize the OccupancyField. Arguments:
+        node: ParticleFilter instance.
+        extra_meters: How many meters outside of the provided
+            map to calculate distances for. Useful for when LiDar
+            rays originating in the map land outside of the map.
+        """
         # grab the map from the map server
         self.cli = node.create_client(GetMap, 'map_server/map')
         while not self.cli.wait_for_service(timeout_sec=1.0):
@@ -124,9 +132,6 @@ class OccupancyField(object):
             y_coord = int(y_coord)
 
         is_valid = (x_coord >= 0) & (y_coord >= 0) & (x_coord < self.map.info.width) & (y_coord < self.map.info.height)
-        if not is_valid:
-            pass
-            # print(f"Invalid cell coords {x_coord}, {y_coord}")
         if type(x) is np.ndarray:
             distances = np.float('nan')*np.ones(x_coord.shape)
             distances[is_valid] = self.closest_occ[x_coord[is_valid], y_coord[is_valid]]

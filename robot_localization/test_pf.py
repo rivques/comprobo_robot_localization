@@ -7,7 +7,7 @@ from pf import ParticleFilter, Particle
 from helper_functions import TFHelper
 from geometry_msgs.msg import Pose
 
-# this is ugly, but allows us to test the particle filter without needing to start up ROS at all
+# This structure allows us to test the particle filter without needing to start up ROS at all
 class InertTFHelper:
     def convert_pose_to_xy_and_theta(self, pose):
         return TFHelper.convert_pose_to_xy_and_theta(None, pose)
@@ -71,7 +71,6 @@ def test_normalize_particles():
     ]
     ParticleFilter.normalize_particles(node)
     assert sum([particle.w for particle in node.particle_cloud]) == pytest.approx(1.0)
-    # TODO: add'l normalized testing
 
 def test_resample_particles():
     node = InertNode()

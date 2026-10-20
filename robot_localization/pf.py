@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 
-""" This is the starter code for the robot localization project """
+"""An implementation of a particle filter. Includes the ParticleFilter ROS node and the Particle class."""
 
 import rclpy
 from threading import Thread
 from rclpy.time import Time
 from rclpy.node import Node
-from std_msgs.msg import Header
 from sensor_msgs.msg import LaserScan
 from nav2_msgs.msg import ParticleCloud
 from nav2_msgs.msg import Particle as Nav2Particle
-from geometry_msgs.msg import PoseWithCovarianceStamped, Pose, Point, Quaternion
+from geometry_msgs.msg import Pose, Point, Quaternion
 from rclpy.duration import Duration
 import math
 import time
@@ -131,8 +130,6 @@ class ParticleFilter(Node):
         """ This is the main run_loop of our particle filter.  It checks to see if
             any scans are ready and to be processed and will call several helper
             functions to complete the processing.
-            
-            You do not need to modify this function, but it is helpful to understand it.
         """
         if self.scan_to_process is None:
             return
@@ -149,13 +146,11 @@ class ParticleFilter(Node):
             return
         
         (r, theta) = self.transform_helper.convert_scan_to_polar_in_robot_frame(msg, self.base_frame)
-        # print("r[0]={0}, theta[0]={1}".format(r[0], theta[0]))
         # clear the current scan so that we can process the next one
         self.scan_to_process = None
 
         self.odom_pose = new_pose
         new_odom_xy_theta = self.transform_helper.convert_pose_to_xy_and_theta(self.odom_pose)
-        # print("x: {0}, y: {1}, yaw: {2}".format(*new_odom_xy_theta))
 
         if not self.current_odom_xy_theta:
             self.current_odom_xy_theta = new_odom_xy_theta
@@ -279,8 +274,10 @@ class ParticleFilter(Node):
 
     def update_particles_with_laser(self, r, theta):
         """ Updates the particle weights in response to the scan data
-            r: the distance readings to obstacles, in meters
-            theta: the angle relative to the robot frame for each corresponding reading, in radians
+
+            Arguments:
+                r: a list of distance readings to obstacles, in meters
+                theta: a list containing the angle relative to the robot frame for each reading, in radians
         """
         # polar to rectangular
         scan_points = np.array([
@@ -290,6 +287,7 @@ class ParticleFilter(Node):
         ]).transpose()
 
         for particle in self.particle_cloud:
+            # project the laser scan onto this particle
             T = np.array([
                 [np.cos(particle.theta), -np.sin(particle.theta), particle.x],
                 [np.sin(particle.theta), np.cos(particle.theta),  particle.y],
@@ -299,12 +297,12 @@ class ParticleFilter(Node):
 
             particle.w = 0
             added_points = 0
-
+            # add up the distance from the nearest obstacle for each laser point
             for point in projected_points.T:
                 obstacle_distance = self.occupancy_field.get_closest_obstacle_distance(point[0], point[1])
                 if math.isfinite(obstacle_distance):
                     added_points += 1
-                    particle.w += obstacle_distance ** 2
+                    particle.w += obstacle_distance ** 2 # square to penalize far-away points more
 
             particle.w /= added_points # normalize for number of points added
 
